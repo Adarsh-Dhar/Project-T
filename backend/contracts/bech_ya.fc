@@ -1,0 +1,97 @@
+#include "imports/stdlib.fc";
+
+;; Storage Variables
+;; game_state: 0 = not started, 1 = in progress, 2 = completed
+;; min_players: minimum number of players required
+;; max_players: maximum number of players allowed
+;; entry_fee: amount each player must deposit
+;; current_players: number of current players
+;; total_pot: total amount in the game pot
+
+;; Storage Structure
+const int GAME_STATE = 0;
+const int MIN_PLAYERS = 2;
+const int MAX_PLAYERS = 6;
+const int ENTRY_FEE = 1000000000; ;; 1 TON
+
+;; Error Codes
+const int ERROR_INVALID_STAKE = 101;
+const int ERROR_GAME_IN_PROGRESS = 102;
+const int ERROR_MAX_PLAYERS_REACHED = 103;
+const int ERROR_INSUFFICIENT_PLAYERS = 104;
+
+;; Storage Variables
+global int game_state;
+global int current_players;
+global int total_pot;
+global cell players; ;; dict of player addresses
+
+() load_data() impure {
+    var ds = get_data().begin_parse();
+    game_state = ds~load_uint(2);  ;; 2 bits for game state
+    current_players = ds~load_uint(3);  ;; 3 bits for up to 6 players
+    total_pot = ds~load_coins();
+    players = ds~load_dict();
+    ds.end_parse();
+}
+
+() save_data() impure {
+    set_data(begin_cell()
+        .store_uint(game_state, 2)
+        .store_uint(current_players, 3)
+        .store_coins(total_pot)
+        .store_dict(players)
+        .end_cell());
+}
+
+() recv_internal(int my_balance, int msg_value, cell in_msg_full, slice in_msg_body) impure {
+    ;; Load contract data
+    load_data();
+    
+    ;; Get sender address
+    var cs = in_msg_full.begin_parse();
+    var flags = cs~load_uint(4);
+    var sender_addr = cs~load_msg_addr();
+    
+    ;; Handle player registration
+    if (game_state == 0) {
+        ;; Check if stake is correct
+        throw_unless(ERROR_INVALID_STAKE, msg_value == ENTRY_FEE);
+        
+        ;; Check if max players reached
+        throw_unless(ERROR_MAX_PLAYERS_REACHED, current_players < MAX_PLAYERS);
+        
+        ;; Add player to the game
+        players~udict_set(267, sender_addr, begin_cell().store_coins(msg_value).end_cell());
+        current_players += 1;
+        total_pot += msg_value;
+        
+        ;; If minimum players reached, start the game
+        if (current_players >= MIN_PLAYERS) {
+            game_state = 1; ;; Set game in progress
+        }
+        
+        save_data();
+        return ();
+    }
+    
+    ;; Prevent new players from joining during game
+    throw_if(ERROR_GAME_IN_PROGRESS, game_state == 1);
+}
+
+;; Get methods for external queries
+
+int get_game_state() method_id {
+    load_data();
+    return game_state;
+}
+
+int get_current_players() method_id {
+    load_data();
+    return current_players;
+}
+
+int get_total_pot() method_id {
+    load_data();
+    return total_pot;
+}
